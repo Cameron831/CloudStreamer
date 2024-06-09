@@ -22,6 +22,8 @@ bucket = "test-bucket-cloud-streamer"
 def handle_upload():
     # Retrieve a list of files from the request; expect 'files[]' to be the key in the form data
     files = request.files.getlist('files[]')
+    # Retrieve the folder path from the form data; expect 'folder' to be the key
+    folder = request.form.get('folder', '')  # Default to root directory if no folder is specified
 
     # Check if no files were included in the request
     if not files:
@@ -31,28 +33,52 @@ def handle_upload():
 
     # Process each file in the list
     for file in files:
-        print(f"uploading {file.filename}")  # Debug print to console
+        filename = secure_filename(file.filename)  # Secure the filename
+        if folder:
+            # Prepend the folder path if provided, ensuring it ends with '/'
+            folder = folder.rstrip('/') + '/'  # Normalize folder path
+            s3_key = f"{folder}{filename}"
+        else:
+            s3_key = filename  # If no folder specified, use just the filename
 
         try:
-            # Secure the filename to ensure it's safe to use as a file name on the filesystem
-            filename = secure_filename(file.filename)
-            # Construct the full local path where the file will be saved temporarily
-            filepath = f"/temp/{filename}"  # Make sure this directory exists and is writable
-
-            # Save the file locally at the designated path
+            # Save the file temporarily
+            filepath = f"/temp/{filename}"
             file.save(filepath)
 
             # Upload the file from the local system to AWS S3
-            s3.upload_file(filepath, bucket, filename)
+            s3.upload_file(filepath, bucket, s3_key)
 
             # Record a successful upload result
-            results.append(f"{filename} uploaded successfully")
+            results.append(f"{s3_key} uploaded successfully")
         except Exception as e:
             # Record an error if the upload fails
-            results.append(f"Failed to upload {filename}: {str(e)}")
+            results.append(f"Failed to upload {s3_key}: {str(e)}")
 
     # Return a JSON response with the results of all file uploads
     return {"results": results}, 200
+
+
+@app.route('/folders', methods=['GET'])
+def get_folders():
+    # Call the AWS S3 service to list objects within a specified bucket.
+    # The list_objects_v2 is a method to retrieve the S3 objects.
+    # 'Bucket' specifies the S3 bucket from which to list the objects.
+    # 'Delimiter' is used to collapse all keys that contain the same string between the prefix and the first occurrence of the delimiter into a single result element.
+    response = s3.list_objects_v2(
+        Bucket=bucket,
+        Delimitex='/',
+    )
+
+    # 'CommonPrefixes' contains all of the keys that are common prefixes
+    # under the given bucket and delimiter. It's used to simulate a folder structure.
+    # Here, it extracts the 'Prefix' from each of the common prefixes,
+    # which represents each 'folder' in the S3 bucket.
+    folders = [item['Prefix'] for item in response.get('CommonPrefixes', [])]
+
+    # Returns the list of 'folders' as the response. Each 'folder' is essentially
+    # a prefix under which objects are stored in the S3 bucket.
+    return folders
 
 
 @app.route('/stream/<filename>', methods=['GET'])
